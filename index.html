@@ -19,8 +19,8 @@ body { font-family: sans-serif; background: var(--color-bg); color: var(--color-
 .tabs { display: flex; background: white; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #ddd; }
 .tab { flex: 1; text-align: center; padding: 15px; cursor: pointer; font-weight: bold; color: #888; }
 .tab.active { border-bottom: 3px solid var(--color-teal); color: var(--color-teal); }
-.attendance-row { border-bottom: 1px solid #eee; padding: 10px 0; }
-.flex-group { display: flex; gap: 10px; align-items: center; margin-top: 5px; }
+.attendance-row { border-bottom: 1px solid #eee; padding: 15px 0; }
+.flex-group { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -36,7 +36,7 @@ body { font-family: sans-serif; background: var(--color-bg); color: var(--color-
 <div id="appScreen" class="hidden">
 <div class="tabs">
 <div class="tab active" onclick="showTab('workers', this)">Staff</div>
-<div class="tab" onclick="showTab('daily', this)">Daily Entry</div>
+<div class="tab" onclick="showTab('daily', this)">Mark Attendance</div>
 <div class="tab" onclick="showTab('reports', this)">Reports</div>
 </div>
 <div class="container">
@@ -49,15 +49,24 @@ body { font-family: sans-serif; background: var(--color-bg); color: var(--color-
 </div>
 <div id="workersList"></div>
 </div>
+
 <div id="dailyTab" class="tab-content hidden">
 <div class="card">
+<label>Select Date</label>
 <input type="date" id="selectedDate" class="form-control" onchange="loadDailyData()">
 <button class="btn btn--secondary" onclick="markAllPresent()" style="width:100%; margin: 10px 0;">Mark All Present</button>
 <div id="entryList"></div>
-<button class="btn btn--primary" onclick="saveDailyRecords()">Save to Cloud</button>
+<button class="btn btn--primary" onclick="saveDailyRecords()" style="margin-top:20px;">Save to Cloud</button>
 </div>
 </div>
-<div id="reportsTab" class="tab-content hidden"><div id="reportOutput"></div></div>
+
+<div id="reportsTab" class="tab-content hidden">
+<div class="card">
+<input type="month" id="reportMonth" class="form-control">
+<button class="btn btn--primary" onclick="generateReport()">Generate Monthly Report</button>
+</div>
+<div id="reportOutput"></div>
+</div>
 </div>
 </div>
 
@@ -77,7 +86,7 @@ let workerData = [];
 
 function login() {
 const id = document.getElementById('managerId').value.trim().toLowerCase();
-if(!id) return alert("Enter Name");
+if(!id) return alert("Enter Manager Name");
 currentMgr = id;
 document.getElementById('loginScreen').classList.add('hidden');
 document.getElementById('appScreen').classList.remove('hidden');
@@ -96,18 +105,22 @@ if(tabId === 'daily') loadDailyData();
 function addWorker() {
 const name = document.getElementById('workerName').value;
 const rate = document.getElementById('workerRate').value;
-if(name && rate) db.ref(`users/${currentMgr}/workers`).push({ name, rate: parseFloat(rate) });
+if(name && rate) {
+db.ref(`users/${currentMgr}/workers`).push({ name, rate: parseFloat(rate) });
+document.getElementById('workerName').value = '';
+document.getElementById('workerRate').value = '';
+}
 }
 
 function loadWorkers() {
 db.ref(`users/${currentMgr}/workers`).on('value', (snap) => {
 const list = document.getElementById('workersList');
 workerData = [];
-list.innerHTML = "";
+list.innerHTML = "<h4>Staff List</h4>";
 snap.forEach((child) => {
 const w = child.val(); w.id = child.key;
 workerData.push(w);
-list.innerHTML += `<div class="card"><b>${w.name}</b> (₹${w.rate})</div>`;
+list.innerHTML += `<div class="card"><b>${w.name}</b> (₹${w.rate}/day)</div>`;
 });
 });
 }
@@ -116,17 +129,26 @@ async function loadDailyData() {
 const date = document.getElementById('selectedDate').value;
 const snap = await db.ref(`users/${currentMgr}/daily/${date}`).once('value');
 const data = snap.val() || {};
-document.getElementById('entryList').innerHTML = workerData.map(w => {
-const rec = data[w.id] || { status: 'absent', advance: 0 };
-return `<div class="attendance-row"><b>${w.name}</b>
+const container = document.getElementById('entryList');
+container.innerHTML = workerData.map(w => {
+const rec = data[w.id] || { status: 'absent', advance: 0, ot: 0 };
+return `<div class="attendance-row">
+<strong>${w.name}</strong>
 <div class="flex-group">
 <select id="status_${w.id}" class="form-control">
 <option value="present" ${rec.status=='present'?'selected':''}>Present</option>
+<option value="half" ${rec.status=='half'?'selected':''}>Half Day</option>
 <option value="absent" ${rec.status=='absent'?'selected':''}>Absent</option>
 </select>
-<input type="number" id="pay_${w.id}" class="form-control" value="${rec.advance}">
-</div></div>`;
+<input type="number" id="ot_${w.id}" class="form-control" placeholder="OT Hrs" value="${rec.ot || 0}">
+<input type="number" id="pay_${w.id}" class="form-control" placeholder="Advance ₹" value="${rec.advance || 0}">
+</div>
+</div>`;
 }).join('');
+}
+
+function markAllPresent() {
+workerData.forEach(w => document.getElementById(`status_${w.id}`).value = 'present');
 }
 
 function saveDailyRecords() {
@@ -135,11 +157,41 @@ const updates = {};
 workerData.forEach(w => {
 updates[w.id] = {
 status: document.getElementById(`status_${w.id}`).value,
+ot: parseFloat(document.getElementById(`ot_${w.id}`).value) || 0,
 advance: parseFloat(document.getElementById(`pay_${w.id}`).value) || 0
 };
 });
 db.ref(`users/${currentMgr}/daily/${date}`).set(updates);
-alert("Saved!");
+alert("Attendance Saved to Cloud!");
+}
+
+async function generateReport() {
+const monthStr = document.getElementById('reportMonth').value;
+if(!monthStr) return alert("Select Month");
+const snap = await db.ref(`users/${currentMgr}/daily`).once('value');
+const allData = snap.val() || {};
+const container = document.getElementById('reportOutput');
+container.innerHTML = "<h3>Monthly Report</h3>";
+
+workerData.forEach(w => {
+let worked = 0, ot = 0, advances = 0;
+Object.keys(allData).forEach(date => {
+if(date.startsWith(monthStr) && allData[date][w.id]) {
+const rec = allData[date][w.id];
+if(rec.status === 'present') worked += 1;
+if(rec.status === 'half') worked += 0.5;
+ot += (rec.ot || 0);
+advances += (rec.advance || 0);
+}
+});
+const earned = (worked * w.rate) + ((w.rate / 8) * ot);
+container.innerHTML += `<div class="card">
+<h4>${w.name}</h4>
+<p>Days: ${worked} | OT: ${ot} hrs</p>
+<p>Earned: ₹${earned.toFixed(0)} | Advance: ₹${advances}</p>
+<p><b>Final Pay: ₹${(earned - advances).toFixed(0)}</b></p>
+</div>`;
+});
 }
 </script>
 </body>
