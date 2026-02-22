@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pyken Attendance Manager</title>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+<style>
+:root {
+--color-teal: #21808d;
+--color-bg: #fcfcf9;
+--color-text: #13343b;
+}
+body { font-family: -apple-system, sans-serif; background: var(--color-bg); color: var(--color-text); margin: 0; padding-bottom: 50px; }
+.container { max-width: 600px; margin: 0 auto; padding: 20px; }
+.card { background: white; padding: 15px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.1); margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+.hidden { display: none; }
+.btn { padding: 12px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; transition: 0.2s; }
+.btn--primary { background: var(--color-teal); color: white; width: 100%; }
+.btn--secondary { background: #eee; color: #333; }
+.btn--sm { padding: 5px 10px; font-size: 12px; }
+.form-control { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+.tabs { display: flex; background: white; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #ddd; }
+.tab { flex: 1; text-align: center; padding: 15px; cursor: pointer; font-weight: bold; color: #888; }
+.tab.active { border-bottom: 3px solid var(--color-teal); color: var(--color-teal); }
+.attendance-row { border-bottom: 1px solid #eee; padding: 10px 0; }
+.flex-group { display: flex; gap: 10px; align-items: center; margin-top: 5px; }
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.summary-item { background: #f0f9fa; padding: 8px; border-radius: 6px; text-align: center; font-size: 14px; }
+.summary-item b { display: block; font-size: 16px; color: var(--color-teal); }
+.negative { color: #c1152f !important; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="container">
+<div class="card" style="margin-top: 50px; text-align: center;">
+<h2>Pyken Manager Login</h2>
+<input type="text" id="managerId" class="form-control" placeholder="Manager Name">
+<input type="password" id="passcode" class="form-control" placeholder="4-Digit PIN" maxlength="4">
+<button class="btn btn--primary" onclick="login()">Login / Register</button>
+</div>
+</div>
+
+<div id="appScreen" class="hidden">
+<div class="tabs">
+<div class="tab active" onclick="showTab('workers', this)">Staff</div>
+<div class="tab" onclick="showTab('daily', this)">Daily</div>
+<div class="tab" onclick="showTab('reports', this)">Reports</div>
+</div>
+
+<div class="container">
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+<span id="displayUser" style="font-weight: bold;"></span>
+<button class="btn btn--secondary btn--sm" onclick="location.reload()">Logout</button>
+</div>
+
+<div id="workersTab" class="tab-content">
+<div class="card">
+<h4>Add Worker</h4>
+<input type="text" id="workerName" class="form-control" placeholder="Worker Name">
+<input type="number" id="workerRate" class="form-control" placeholder="Daily Rate (₹)">
+<button class="btn btn--primary" onclick="addWorker()">Save Worker</button>
+</div>
+<div id="workersList"></div>
+</div>
+
+<div id="dailyTab" class="tab-content hidden">
+<div class="card">
+<label>Select Date</label>
+<input type="date" id="selectedDate" class="form-control" onchange="loadDailyData()">
+<button class="btn btn--secondary btn--sm" onclick="markAllPresent()" style="width:100%; margin: 10px 0;">Mark All Present</button>
+<div id="entryList"></div>
+<button class="btn btn--primary" onclick="saveDailyRecords()" style="margin-top:20px;">Save to Cloud</button>
+</div>
+</div>
+
+<div id="reportsTab" class="tab-content hidden">
+<div class="card">
+<label>Select Month</label>
+<input type="month" id="reportMonth" class="form-control">
+<div style="display: flex; gap: 10px;">
+<button class="btn btn--primary" onclick="generateReport()">View Report</button>
+<button class="btn btn--secondary" onclick="window.print()">Print</button>
+</div>
+</div>
+<div id="reportOutput"></div>
+</div>
+</div>
+</div>
+
+<script>
+// --- YOUR FIREBASE CONFIG ---
+const firebaseConfig = {
+apiKey: "AIzaSyADouNssK8yWx1hdTfDzbMwjB5gRTJRKKY",
+authDomain: "pyken-attendance.firebaseapp.com",
+projectId: "pyken-attendance",
+storageBucket: "pyken-attendance.firebasestorage.app",
+messagingSenderId: "311967008455",
+appId: "1:311967008455:web:963a273374244548c220e2",
+measurementId: "G-1ZRL702DBJ"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+let currentMgr = null;
+let workerData = [];
+
+function login() {
+const id = document.getElementById('managerId').value.trim().toLowerCase();
+const pin = document.getElementById('passcode').value;
+if(!id || pin.length < 4) return alert("Enter Name and 4-digit PIN");
+
+currentMgr = id;
+document.getElementById('loginScreen').classList.add('hidden');
+document.getElementById('appScreen').classList.remove('hidden');
+document.getElementById('displayUser').innerText = "Mgr: " + id.toUpperCase();
+document.getElementById('selectedDate').valueAsDate = new Date();
+loadWorkers();
+}
+
+function showTab(tabId, el) {
+document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+document.getElementById(tabId + 'Tab').classList.remove('hidden');
+el.classList.add('active');
+if(tabId === 'daily') loadDailyData();
+}
+
+function addWorker() {
+const name = document.getElementById('workerName').value;
+const rate = document.getElementById('workerRate').value;
+if(!name || !rate) return;
+db.ref(`users/${currentMgr}/workers`).push({ name, rate: parseFloat(rate) });
+document.getElementById('workerName').value = '';
+document.getElementById('workerRate').value = '';
+}
+
+function loadWorkers() {
+db.ref(`users/${currentMgr}/workers`).on('value', (snapshot) => {
+const list = document.getElementById('workersList');
+workerData = [];
+list.innerHTML = "<h4>Staff List</h4>";
+snapshot.forEach((child) => {
+const worker = child.val();
+worker.id = child.key;
+workerData.push(worker);
+list.innerHTML += `<div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+<span><b>${worker.name}</b><br><small>Rate: ₹${worker.rate}</small></span>
+<button class="btn btn--secondary btn--sm" onclick="deleteWorker('${worker.id}')">Delete</button>
+</div>`;
+});
+});
+}
+
+function deleteWorker(id) {
+if(confirm("Delete worker?")) db.ref(`users/${currentMgr}/workers/${id}`).remove();
+}
+
+async function loadDailyData() {
+const date = document.getElementById('selectedDate').value;
+const snapshot = await db.ref(`users/${currentMgr}/daily/${date}`).once('value');
+const data = snapshot.val() || {};
+const container = document.getElementById('entryList');
+container.innerHTML = workerData.map(w => {
+const rec = data[w.id] || { status: 'absent', advance: 0 };
+return `<div class="attendance-row">
+<strong>${w.name}</strong>
+<div class="flex-group">
+<select id="status_${w.id}" class="form-control">
+<option value="present" ${rec.status=='present'?'selected':''}>Present</option>
+<option value="half" ${rec.status=='half'?'selected':''}>Half Day</option>
+<option value="absent" ${rec.status=='absent'?'selected':''}>Absent</option>
+</select>
+<input type="number" id="pay_${w.id}" class="form-control" placeholder="Advance ₹" value="${rec.advance || 0}">
+</div>
+</div>`;
+}).join('');
+}
+
+function markAllPresent() {
+workerData.forEach(w => {
+const el = document.getElementById(`status_${w.id}`);
+if(el) el.value = 'present';
+});
+}
+
+function saveDailyRecords() {
+const date = document.getElementById('selectedDate').value;
+const updates = {};
+workerData.forEach(w => {
+updates[w.id] = {
+status: document.getElementById(`status_${w.id}`).value,
+advance: parseFloat(document.getElementById(`pay_${w.id}`).value) || 0
+};
+});
+db.ref(`users/${currentMgr}/daily/${date}`).set(updates);
+alert("Saved!");
+}
+
+async function generateReport() {
+const monthStr = document.getElementById('reportMonth').value;
+if(!monthStr) return alert("Select Month");
+
+const snapshot = await db.ref(`users/${currentMgr}/daily`).once('value');
+const allData = snapshot.val() || {};
+const container = document.getElementById('reportOutput');
+container.innerHTML = `<h3>Report for ${monthStr}</h3>`;
+
+workerData.forEach(w => {
+let worked = 0, taken = 0, prevDues = 0;
+
+// Calculate current month
+Object.keys(allData).forEach(date => {
+if(allData[date][w.id]) {
+const rec = allData[date][w.id];
+if(date.startsWith(monthStr)) {
+if(rec.status === 'present') worked += 1;
+if(rec.status === 'half') worked += 0.5;
+taken += (rec.advance || 0);
+} else if (date < monthStr) {
+// Logic to find carry-forward advance from previous months
+let monthEarned = 0;
+if(rec.status === 'present') monthEarned = w.rate;
+if(rec.status === 'half') monthEarned = w.rate * 0.5;
+prevDues += (rec.advance || 0) - monthEarned;
+}
+}
+});
+
+const currentEarned = worked * w.rate;
+const totalDues = (prevDues > 0 ? prevDues : 0) + taken;
+const finalBalance = currentEarned - totalDues;
+
+container.innerHTML += `<div class="card">
+<h4>${w.name}</h4>
+<div class="summary-grid">
+<div class="summary-item">Days Worked<b>${worked}</b></div>
+<div class="summary-item">Earned<b>₹${currentEarned}</b></div>
+<div class="summary-item">Month Advance<b>₹${taken}</b></div>
+<div class="summary-item">Previous Adv.<b>₹${prevDues > 0 ? prevDues.toFixed(0) : 0}</b></div>
+<div class="summary-item" style="background:#e6fffa; grid-column: span 2;">
+Final Settlement <b>₹${finalBalance.toFixed(0)}</b>
+<small>${finalBalance < 0 ? 'Worker owes you (Advance)' : 'You owe worker'}</small>
+</div>
+</div>
+</div>`;
+});
+}
+</script>
+</body>
+</html>
